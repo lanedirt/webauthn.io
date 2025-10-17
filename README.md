@@ -5,35 +5,51 @@ Duo's introduction to the wonderful world of WebAuthn. Powered by [py_webauthn](
 ## Prerequisites
 
 - Docker
-- Pipenv
-  - Make sure Python3 is available
-  - Enables `pipenv install` to set up libraries locally for the editor to crawl. The Django container also uses Pipenv to install dependencies to encourage use of this new Python package management tool.
+- Docker Compose
 
-## Environmental Variable
+## Environment Variables
 
-- `DJANGO_SECRET_KEY`: A sufficiently random string
-- `PROD_HOST_NAME`: The domain name the site will be hosted at
-- `PROD_CSRF_ORIGIN`: The domain name plus protocol from which requests to the backend should occur (e.g. `https://webauthn.io`)
-- `RP_ID`: The Relying Party ID, typically the same as `PROD_HOST_NAME`
-- `RP_NAME`: A representation of the site's name to be shown to users
-- `RP_EXPECTED_ORIGIN`: The domain name plus protocol at which WebAuthn will be invoked (e.g. `https://webauthn.io`)
+Copy `.env.template` to `.env` and configure the following variables:
 
-## Development
+- `DJANGO_SECRET_KEY`: A sufficiently random string (required)
+- `PROD_HOST_NAME`: The domain name the site will be hosted at (default: localhost)
+- `PROD_CSRF_ORIGIN`: The domain name plus protocol from which requests to the backend should occur (default: http://localhost)
+- `RP_ID`: The Relying Party ID, typically the same as `PROD_HOST_NAME` (default: localhost)
+- `RP_NAME`: A representation of the site's name to be shown to users (default: WebAuthn Demo)
+- `RP_EXPECTED_ORIGIN`: The domain name plus protocol at which WebAuthn will be invoked (default: http://localhost)
+- `DEBUG`: Set to `true` for development mode (default: false)
+- `REDIS_HOSTNAME`: Redis hostname (default: redis)
 
-Run the following command to get started:
+## Quick Start
 
-```sh
-./start-dev.sh
-```
+1. Copy the environment template:
+   ```sh
+   cp .env.template .env
+   ```
+
+2. Edit `.env` and set your `DJANGO_SECRET_KEY` (generate a random string)
+
+3. Start the application:
+   ```sh
+   docker compose up
+   ```
 
 The site will be available at http://localhost/
 
-### CSS
+## Development
 
-CSS leans on browsers and their [native CSS nesting support](https://blog.logrocket.com/native-css-nesting/), which allows for nicer CSS authoring without pre-processors. Unfortunately for now this means the following command will need to be run after making any changes to CSS to ensure that the changes are served by Caddy on subsequent reloads:
+For development with live code changes, you can mount the source code:
 
 ```sh
-docker compose run django ./manage.py collectstatic --no-input
+docker compose -f docker-compose.yml -f docker-compose.override.yml up
+```
+
+### CSS
+
+CSS leans on browsers and their [native CSS nesting support](https://blog.logrocket.com/native-css-nesting/), which allows for nicer CSS authoring without pre-processors. After making changes to CSS, run:
+
+```sh
+docker compose run django python manage.py collectstatic --no-input
 ```
 
 ## Production

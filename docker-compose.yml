@@ -31,9 +31,7 @@ services:
         - DJANGO_SECRET_KEY
     depends_on:
       - redis
-    command: gunicorn webauthnio.wsgi -c gunicorn.cfg.py
     volumes:
-      - ./_app:/usr/src/app
       # Django static files will go here so Caddy can access them
       - static_files_volume:/usr/src/app/static
     networks:
@@ -49,6 +47,7 @@ services:
       - RP_EXPECTED_ORIGIN
       - AASA_APP_ID_PREFIX
       - AASA_BUNDLE_ID
+      - REDIS_HOSTNAME
 
 volumes:
   static_files_volume:

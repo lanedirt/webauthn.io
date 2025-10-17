@@ -1,21 +1,10 @@
-# THESE OVERRIDES ARE FOR DEVELOPMENT! DON'T USE THIS IN PRODUCTION!
+# Development override for docker-compose.yml
+# This file mounts the source code for live development
+
 services:
-  caddy:
-    environment:
-      # Site will be available at http://localhost
-      - PROD_CSRF_ORIGIN=http://localhost
-
-  redis:
-    ports:
-      - "6379:6379"
-
   django:
-    # Automatically reload Gunicorn when a file changes
-    command: gunicorn webauthnio.wsgi -c gunicorn.cfg.py --reload
+    volumes:
+      - ./_app:/usr/src/app
+      - static_files_volume:/usr/src/app/static
     environment:
       - DEBUG=true
-      - RP_ID=localhost
-      - RP_NAME=WebAuthn.io (Dev)
-      - RP_EXPECTED_ORIGIN=http://localhost
-      - PROD_HOST_NAME=
-      - PROD_CSRF_ORIGIN=
