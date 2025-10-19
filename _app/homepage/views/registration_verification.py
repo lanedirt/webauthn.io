@@ -1,4 +1,6 @@
 import json
+import logging
+import traceback
 
 from django.http import JsonResponse, HttpRequest
 from django.views.decorators.csrf import csrf_exempt
@@ -8,6 +10,8 @@ from homepage.services.credential import CredentialService
 from homepage.services.registration import RegistrationService
 from homepage.forms import RegistrationResponseForm
 from homepage.response import JsonResponseBadRequest
+
+logger = logging.getLogger(__name__)
 
 
 @csrf_exempt
@@ -37,7 +41,19 @@ def registration_verification(request: HttpRequest) -> JsonResponse:
             username=username,
             response=webauthn_response,
         )
+    except Exception as err:
+        error_msg = str(err)
+        logger.error(f"Registration verification failed: {error_msg}\nUsername: {username}\nTraceback: {traceback.format_exc()}")
+        return JsonResponseBadRequest({
+            "error": error_msg,
+            "debug_info": {
+                "step": "registration_verification",
+                "username": username,
+                "error_type": type(err).__name__,
+            }
+        })
 
+    try:
         _response: dict = webauthn_response.get("response", {})
         transports: list = _response.get("transports", [])
 
@@ -69,6 +85,15 @@ def registration_verification(request: HttpRequest) -> JsonResponse:
             is_discoverable_credential=is_discoverable_credential,
         )
     except Exception as err:
-        return JsonResponseBadRequest({"error": str(err)})
+        error_msg = f"Failed to store credential: {str(err)}"
+        logger.error(f"{error_msg}\nUsername: {username}\nTraceback: {traceback.format_exc()}")
+        return JsonResponseBadRequest({
+            "error": error_msg,
+            "debug_info": {
+                "step": "credential_storage",
+                "username": username,
+                "error_type": type(err).__name__,
+            }
+        })
 
     return JsonResponse({"verified": True})

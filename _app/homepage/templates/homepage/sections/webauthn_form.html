@@ -21,6 +21,7 @@
             <div class="col-sm-12">
               <div
                 :class="alert.alertClass"
+                style="white-space: pre-wrap; font-family: monospace; font-size: 0.9em;"
                 x-text="alert.text"
                 aria-live="polite"
               ></div>
@@ -825,7 +826,17 @@
         if (verificationJSON.verified === true) {
           this.showSuccessAlert('Success! Now try to authenticate...');
         } else {
-          this.showErrorAlert(`Registration failed: ${verificationJSON.error}`);
+          let errorMsg = `Registration failed: ${verificationJSON.error}`;
+          if (verificationJSON.debug_info) {
+            errorMsg += `\n\nDebug Info:\n- Step: ${verificationJSON.debug_info.step}`;
+            if (verificationJSON.debug_info.error_type) {
+              errorMsg += `\n- Error Type: ${verificationJSON.debug_info.error_type}`;
+            }
+            if (verificationJSON.debug_info.username) {
+              errorMsg += `\n- Username: ${verificationJSON.debug_info.username}`;
+            }
+          }
+          this.showErrorAlert(errorMsg);
         }
       },
       async _startAuthentication(startConditionalUI = false) {
@@ -886,7 +897,20 @@
           // Reload page to display profile
           window.location.href = '{% url "profile" %}';
         } else {
-          this.showErrorAlert(`Authentication failed: ${verificationJSON.error}`);
+          let errorMsg = `Authentication failed: ${verificationJSON.error}`;
+          if (verificationJSON.debug_info) {
+            errorMsg += `\n\nDebug Info:\n- Step: ${verificationJSON.debug_info.step}`;
+            if (verificationJSON.debug_info.error_type) {
+              errorMsg += `\n- Error Type: ${verificationJSON.debug_info.error_type}`;
+            }
+            if (verificationJSON.debug_info.credential_id) {
+              errorMsg += `\n- Credential ID: ${verificationJSON.debug_info.credential_id}`;
+            }
+            if (verificationJSON.debug_info.username) {
+              errorMsg += `\n- Username: ${verificationJSON.debug_info.username}`;
+            }
+          }
+          this.showErrorAlert(errorMsg);
         }
       },
       async _startConditionalUI() {

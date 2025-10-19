@@ -1,4 +1,6 @@
 from typing import Union, List, Optional
+import logging
+import traceback
 
 from django.conf import settings
 from webauthn import (
@@ -26,6 +28,8 @@ from webauthn.helpers.cose import COSEAlgorithmIdentifier
 from homepage.services import RedisService
 from homepage.exceptions import InvalidRegistrationSession
 from homepage.models import WebAuthnCredential
+
+logger = logging.getLogger(__name__)
 
 
 class RegistrationService:
@@ -127,11 +131,19 @@ class RegistrationService:
         return registration_options
 
     def verify_registration_response(self, *, username: str, response: dict):
-        credential = parse_registration_credential_json(response)
+        try:
+            credential = parse_registration_credential_json(response)
+        except Exception as exc:
+            error_msg = f"Failed to parse registration credential: {str(exc)}"
+            logger.error(f"{error_msg}\nUsername: {username}\nResponse: {response}\nTraceback: {traceback.format_exc()}")
+            raise InvalidRegistrationSession(error_msg)
+
         options = self._get_options(username=username)
 
         if not options:
-            raise InvalidRegistrationSession(f"no options for user {username}")
+            error_msg = f"No registration options found for user {username}. Options may have expired or were never created."
+            logger.error(error_msg)
+            raise InvalidRegistrationSession(error_msg)
 
         require_user_verification = False
         if options.authenticator_selection:
@@ -142,14 +154,57 @@ class RegistrationService:
 
         self._delete_options(username=username)
 
-        verification = verify_registration_response(
-            credential=credential,
-            expected_challenge=options.challenge,
-            expected_rp_id=settings.RP_ID,
-            expected_origin=settings.RP_EXPECTED_ORIGIN,
-            require_user_verification=require_user_verification,
-            supported_pub_key_algs=[param.alg for param in options.pub_key_cred_params],
+        # Log verification attempt details
+        logger.info(
+            f"Attempting registration verification:\n"
+            f"  Username: {username}\n"
+            f"  Expected RP ID: {settings.RP_ID}\n"
+            f"  Expected Origin: {settings.RP_EXPECTED_ORIGIN}\n"
+            f"  Require User Verification: {require_user_verification}\n"
+            f"  Supported Algorithms: {[param.alg for param in options.pub_key_cred_params]}"
         )
+
+        try:
+            verification = verify_registration_response(
+                credential=credential,
+                expected_challenge=options.challenge,
+                expected_rp_id=settings.RP_ID,
+                expected_origin=settings.RP_EXPECTED_ORIGIN,
+                require_user_verification=require_user_verification,
+                supported_pub_key_algs=[param.alg for param in options.pub_key_cred_params],
+            )
+        except Exception as exc:
+            # Extract detailed error information
+            error_type = type(exc).__name__
+
+            # Log full traceback for debugging
+            logger.error(
+                f"Registration verification failed:\n"
+                f"  Error Type: {error_type}\n"
+                f"  Error Message: {str(exc)}\n"
+                f"  Username: {username}\n"
+                f"  Expected RP ID: {settings.RP_ID}\n"
+                f"  Expected Origin: {settings.RP_EXPECTED_ORIGIN}\n"
+                f"  Require User Verification: {require_user_verification}\n"
+                f"  Traceback:\n{traceback.format_exc()}"
+            )
+
+            # Build a user-friendly but informative error message
+            user_error_msg = f"Could not verify registration response: {error_type} - {str(exc)}"
+
+            # Add specific guidance based on common error types
+            if "origin" in str(exc).lower():
+                user_error_msg += f" (Expected origin: {settings.RP_EXPECTED_ORIGIN})"
+            elif "rp" in str(exc).lower() or "relying party" in str(exc).lower():
+                user_error_msg += f" (Expected RP ID: {settings.RP_ID})"
+            elif "attestation" in str(exc).lower():
+                user_error_msg += " (Attestation validation failed)"
+            elif "challenge" in str(exc).lower():
+                user_error_msg += " (Challenge validation failed - session may have expired)"
+            elif "algorithm" in str(exc).lower():
+                user_error_msg += f" (Unsupported algorithm - expected one of: {[param.alg for param in options.pub_key_cred_params]})"
+
+            raise InvalidRegistrationSession(user_error_msg)
 
         return (
             verification,
