@@ -176,34 +176,105 @@ class RegistrationService:
         except Exception as exc:
             # Extract detailed error information
             error_type = type(exc).__name__
+            error_module = type(exc).__module__
+            error_msg = str(exc)
+
+            # Try to get the actual response data for debugging
+            response_data = {
+                "username": username,
+                "expected_rp_id": settings.RP_ID,
+                "expected_origin": settings.RP_EXPECTED_ORIGIN,
+                "require_user_verification": require_user_verification,
+                "supported_algorithms": [param.alg for param in options.pub_key_cred_params],
+            }
+
+            # Try to extract actual values from the credential response
+            try:
+                if hasattr(credential, 'response'):
+                    if hasattr(credential.response, 'client_data_json'):
+                        import json
+                        client_data = json.loads(credential.response.client_data_json)
+                        response_data["actual_origin"] = client_data.get("origin")
+                        response_data["actual_type"] = client_data.get("type")
+                    if hasattr(credential.response, 'authenticator_data'):
+                        auth_data = credential.response.authenticator_data
+                        if len(auth_data) >= 37:
+                            response_data["rp_id_hash"] = auth_data[:32].hex()
+                            flags = auth_data[32]
+                            response_data["flags"] = {
+                                "user_present": bool(flags & 0x01),
+                                "user_verified": bool(flags & 0x04),
+                                "attested_credential_data": bool(flags & 0x40),
+                            }
+                if hasattr(credential, 'id'):
+                    response_data["credential_id"] = credential.id
+                if hasattr(credential, 'type'):
+                    response_data["credential_type"] = credential.type
+            except Exception as parse_exc:
+                logger.warning(f"Could not parse credential response data: {parse_exc}")
 
             # Log full traceback for debugging
             logger.error(
                 f"Registration verification failed:\n"
-                f"  Error Type: {error_type}\n"
-                f"  Error Message: {str(exc)}\n"
-                f"  Username: {username}\n"
-                f"  Expected RP ID: {settings.RP_ID}\n"
-                f"  Expected Origin: {settings.RP_EXPECTED_ORIGIN}\n"
-                f"  Require User Verification: {require_user_verification}\n"
+                f"  Error Type: {error_module}.{error_type}\n"
+                f"  Error Message: {error_msg}\n"
+                f"  Response Data: {response_data}\n"
                 f"  Traceback:\n{traceback.format_exc()}"
             )
 
-            # Build a user-friendly but informative error message
-            user_error_msg = f"Could not verify registration response: {error_type} - {str(exc)}"
+            # Build a detailed, user-friendly error message
+            debug_parts = [
+                f"Verification failed: {error_type}",
+                f"Message: {error_msg}",
+                f"",
+                "Verification Parameters:",
+                f"  Expected RP ID: {settings.RP_ID}",
+                f"  Expected Origin: {settings.RP_EXPECTED_ORIGIN}",
+                f"  User Verification Required: {require_user_verification}",
+                f"  Supported Algorithms: {[param.alg for param in options.pub_key_cred_params]}",
+            ]
 
-            # Add specific guidance based on common error types
-            if "origin" in str(exc).lower():
-                user_error_msg += f" (Expected origin: {settings.RP_EXPECTED_ORIGIN})"
-            elif "rp" in str(exc).lower() or "relying party" in str(exc).lower():
-                user_error_msg += f" (Expected RP ID: {settings.RP_ID})"
-            elif "attestation" in str(exc).lower():
-                user_error_msg += " (Attestation validation failed)"
-            elif "challenge" in str(exc).lower():
-                user_error_msg += " (Challenge validation failed - session may have expired)"
-            elif "algorithm" in str(exc).lower():
-                user_error_msg += f" (Unsupported algorithm - expected one of: {[param.alg for param in options.pub_key_cred_params]})"
+            # Add actual values if we extracted them
+            if "actual_origin" in response_data:
+                debug_parts.extend([
+                    "",
+                    "Actual Values from Response:",
+                    f"  Actual Origin: {response_data['actual_origin']}",
+                ])
+                if response_data["actual_origin"] != settings.RP_EXPECTED_ORIGIN:
+                    debug_parts.append(f"  ⚠️  ORIGIN MISMATCH!")
 
+            if "credential_type" in response_data:
+                debug_parts.append(f"  Credential Type: {response_data['credential_type']}")
+
+            if "flags" in response_data:
+                flags = response_data["flags"]
+                debug_parts.extend([
+                    "  Authenticator Flags:",
+                    f"    User Present: {flags['user_present']}",
+                    f"    User Verified: {flags['user_verified']}",
+                    f"    Attested Credential Data: {flags['attested_credential_data']}",
+                ])
+                if require_user_verification and not flags['user_verified']:
+                    debug_parts.append(f"    ⚠️  USER VERIFICATION REQUIRED BUT NOT PRESENT!")
+
+            # Add specific guidance based on error type
+            debug_parts.append("")
+            if "origin" in error_msg.lower():
+                debug_parts.append("💡 Origin mismatch - check that your RP_EXPECTED_ORIGIN matches the actual origin")
+            elif "rp" in error_msg.lower() or "relying party" in error_msg.lower():
+                debug_parts.append("💡 RP ID mismatch - check that your RP_ID matches the domain")
+            elif "attestation" in error_msg.lower():
+                debug_parts.append("💡 Attestation validation failed - check attestation format and trust path")
+            elif "challenge" in error_msg.lower():
+                debug_parts.append("💡 Challenge validation failed - session may have expired or challenge was reused")
+            elif "algorithm" in error_msg.lower():
+                debug_parts.append("💡 Algorithm validation failed - authenticator used unsupported algorithm")
+                debug_parts.append(f"   Supported: {[param.alg for param in options.pub_key_cred_params]}")
+            elif "user" in error_msg.lower() and "verif" in error_msg.lower():
+                debug_parts.append("💡 User verification failed - authenticator didn't perform user verification when required")
+
+            user_error_msg = "\n".join(debug_parts)
             raise InvalidRegistrationSession(user_error_msg)
 
         return (

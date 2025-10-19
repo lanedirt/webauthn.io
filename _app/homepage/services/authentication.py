@@ -131,9 +131,11 @@ class AuthenticationService:
         except Exception as exc:
             # Extract detailed error information
             error_type = type(exc).__name__
-            error_details = {
-                "error_type": error_type,
-                "error_message": str(exc),
+            error_module = type(exc).__module__
+            error_msg = str(exc)
+
+            # Try to get the actual response data for debugging
+            response_data = {
                 "credential_id": existing_credential.id,
                 "username": existing_credential.username,
                 "expected_rp_id": settings.RP_ID,
@@ -142,35 +144,100 @@ class AuthenticationService:
                 "current_sign_count": existing_credential.sign_count,
             }
 
+            # Try to extract actual values from the credential response
+            try:
+                if hasattr(credential, 'response'):
+                    if hasattr(credential.response, 'client_data_json'):
+                        import json
+                        from base64 import b64decode
+                        client_data = json.loads(credential.response.client_data_json)
+                        response_data["actual_origin"] = client_data.get("origin")
+                        response_data["actual_type"] = client_data.get("type")
+                    if hasattr(credential.response, 'authenticator_data'):
+                        auth_data = credential.response.authenticator_data
+                        # Extract RP ID hash (first 32 bytes)
+                        if len(auth_data) >= 37:
+                            response_data["rp_id_hash"] = auth_data[:32].hex()
+                            # Extract flags (byte 32)
+                            flags = auth_data[32]
+                            response_data["flags"] = {
+                                "user_present": bool(flags & 0x01),
+                                "user_verified": bool(flags & 0x04),
+                                "backup_eligible": bool(flags & 0x08),
+                                "backup_state": bool(flags & 0x10),
+                                "attested_credential_data": bool(flags & 0x40),
+                                "extension_data": bool(flags & 0x80),
+                            }
+                            # Extract sign count (bytes 33-36)
+                            response_data["actual_sign_count"] = int.from_bytes(auth_data[33:37], byteorder='big')
+            except Exception as parse_exc:
+                logger.warning(f"Could not parse credential response data: {parse_exc}")
+
             # Log full traceback for debugging
             logger.error(
                 f"Authentication signature verification failed:\n"
-                f"  Error Type: {error_type}\n"
-                f"  Error Message: {str(exc)}\n"
-                f"  Credential ID: {existing_credential.id}\n"
-                f"  Username: {existing_credential.username}\n"
-                f"  Expected RP ID: {settings.RP_ID}\n"
-                f"  Expected Origin: {settings.RP_EXPECTED_ORIGIN}\n"
-                f"  Require User Verification: {require_user_verification}\n"
-                f"  Current Sign Count: {existing_credential.sign_count}\n"
+                f"  Error Type: {error_module}.{error_type}\n"
+                f"  Error Message: {error_msg}\n"
+                f"  Response Data: {response_data}\n"
                 f"  Traceback:\n{traceback.format_exc()}"
             )
 
-            # Build a user-friendly but informative error message
-            user_error_msg = f"Could not verify authentication signature: {error_type} - {str(exc)}"
+            # Build a detailed, user-friendly error message
+            debug_parts = [
+                f"Verification failed: {error_type}",
+                f"Message: {error_msg}",
+                f"",
+                "Verification Parameters:",
+                f"  Expected RP ID: {settings.RP_ID}",
+                f"  Expected Origin: {settings.RP_EXPECTED_ORIGIN}",
+                f"  Expected Sign Count: > {existing_credential.sign_count}",
+                f"  User Verification Required: {require_user_verification}",
+            ]
 
-            # Add specific guidance based on common error types
-            if "origin" in str(exc).lower():
-                user_error_msg += f" (Expected origin: {settings.RP_EXPECTED_ORIGIN})"
-            elif "rp" in str(exc).lower() or "relying party" in str(exc).lower():
-                user_error_msg += f" (Expected RP ID: {settings.RP_ID})"
-            elif "signature" in str(exc).lower():
-                user_error_msg += " (Signature validation failed - credential may be invalid or tampered)"
-            elif "challenge" in str(exc).lower():
-                user_error_msg += " (Challenge validation failed - session may have expired)"
-            elif "sign count" in str(exc).lower() or "counter" in str(exc).lower():
-                user_error_msg += f" (Sign count mismatch - expected > {existing_credential.sign_count})"
+            # Add actual values if we extracted them
+            if "actual_origin" in response_data:
+                debug_parts.extend([
+                    "",
+                    "Actual Values from Response:",
+                    f"  Actual Origin: {response_data['actual_origin']}",
+                ])
+                if response_data["actual_origin"] != settings.RP_EXPECTED_ORIGIN:
+                    debug_parts.append(f"  ⚠️  ORIGIN MISMATCH!")
 
+            if "actual_sign_count" in response_data:
+                debug_parts.append(f"  Actual Sign Count: {response_data['actual_sign_count']}")
+                if response_data["actual_sign_count"] <= existing_credential.sign_count:
+                    debug_parts.append(f"  ⚠️  SIGN COUNT NOT INCREMENTED! (Got {response_data['actual_sign_count']}, expected > {existing_credential.sign_count})")
+
+            if "flags" in response_data:
+                flags = response_data["flags"]
+                debug_parts.extend([
+                    "  Authenticator Flags:",
+                    f"    User Present: {flags['user_present']}",
+                    f"    User Verified: {flags['user_verified']}",
+                ])
+                if require_user_verification and not flags['user_verified']:
+                    debug_parts.append(f"    ⚠️  USER VERIFICATION REQUIRED BUT NOT PRESENT!")
+
+            # Add specific guidance based on error type
+            debug_parts.append("")
+            if "origin" in error_msg.lower():
+                debug_parts.append("💡 Origin mismatch - check that your RP_EXPECTED_ORIGIN matches the actual origin")
+            elif "rp" in error_msg.lower() or "relying party" in error_msg.lower():
+                debug_parts.append("💡 RP ID mismatch - check that your RP_ID matches the domain")
+            elif "signature" in error_msg.lower():
+                debug_parts.append("💡 Signature validation failed - possible causes:")
+                debug_parts.append("   - Wrong public key stored for this credential")
+                debug_parts.append("   - Credential was created on different RP ID/origin")
+                debug_parts.append("   - Challenge mismatch or tampered response")
+            elif "challenge" in error_msg.lower():
+                debug_parts.append("💡 Challenge validation failed - session may have expired or challenge was reused")
+            elif "sign count" in error_msg.lower() or "counter" in error_msg.lower():
+                debug_parts.append("💡 Sign count validation failed - authenticator may have been cloned or reset")
+            elif "user" in error_msg.lower() and "verif" in error_msg.lower():
+                debug_parts.append("💡 User verification failed - authenticator didn't perform user verification when required")
+
+            user_error_msg = "\n".join(debug_parts)
             raise InvalidAuthenticationResponse(user_error_msg)
 
         confirmed_username = existing_credential.username
